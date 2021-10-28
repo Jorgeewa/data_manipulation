@@ -23,7 +23,7 @@ class SuspiciousDataException(Exception):
         if self.observable_name != "temperature":
             return
         body = body_text = f"Robot with id {self.robot_id} is sending suspicious data for round id {self.round_id}"
-        recipients = ["george@faromatics.com", "support@faromatics.com"]
+        recipients = ["xxx@xxx.com", "xxx@xxx.com"]
         trigger_event(Events.SUSPICIOUS_DATA, {"round_id": self.round_id, "subject": self.message, "file": self.file, "body": body, "recipients": recipients})
 
 class InvalidRound(Exception):
@@ -58,6 +58,6 @@ class BadFile(Exception):
     def post(self):
         """ send email about bad file being sent"""
         body = body_text = f"Robot with id {self.robot_id} has sent a bad file for round id {self.round_id}"
-        recipients = ["george@faromatics.com", "albert@faromatics.com", "diana@faromatics.com", "andrew@faromatics.com"]
+        recipients = ["xxx@xxx.com", "xxx@xxx.com", "xxx@xxx.com", "xxx@xxx.com"]
         trigger_event(Events.SUSPICIOUS_DATA, {"round_id": self.round_id, "subject": self.message, "file": self.file, "body": body, "recipients": recipients})
 
