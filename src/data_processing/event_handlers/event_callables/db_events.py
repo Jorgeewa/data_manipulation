@@ -91,6 +91,6 @@ def update_measurement(self, params: Dict[str, str]):
     created_by = "0000000"
     measurement = (id_, params['round_id'], params['url'], now, now, params['observable_id'], created_by)
     query = "insert into alert_notification (id, robot_id, url, from, to, observable_id, created_by) values \
-        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        (%s, %s, %s, %s, %s, %s, %s)"
     params['cnx'].cursor.execute(query, params)
     params['cnx'].commit()

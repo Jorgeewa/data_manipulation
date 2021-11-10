@@ -24,8 +24,9 @@ class TimeofDayPeriod(Enum):
 	def __ge__(self, other):
 		return self.value >= other
 
-	def __sub__(self, other):
-		return self.value - other.value
+	def strftime(self, param):
+		return self.value.strftime(param)
+
 
 
 class TimeofDay(Enum):
@@ -33,6 +34,68 @@ class TimeofDay(Enum):
 	AFTERNOON = auto()
 	EVENING = auto()
 	NIGHT = auto()
+
+	def __sub__(self, other):
+		return self.value - other.value
+
+
+class TimeofDayComputation:
+
+	def __init__(self, time, quadrant: TimeofDay):
+		self.quadrants = [TimeofDay.MORNING, TimeofDay.AFTERNOON, TimeofDay.EVENING, TimeofDay.NIGHT]
+		self.current_quadrant_value = quadrant.value
+		self.cordinates = {
+			TimeofDay.MORNING: (TimeofDayPeriod.MORNING_START, TimeofDayPeriod.MORNING_END),
+			TimeofDay.AFTERNOON: (TimeofDayPeriod.AFTERNOON_START, TimeofDayPeriod.AFTERNOON_END),
+			TimeofDay.EVENING: (TimeofDayPeriod.EVENING_START, TimeofDayPeriod.EVENING_END),
+			TimeofDay.NIGHT: (TimeofDayPeriod.NIGHT_START, TimeofDayPeriod.NIGHT_END),
+		}
+		self.start_time, self.end_time = self.reset_quadrants(time, quadrant)
+
+	def reset_quadrants(self, time: datetime, quadrant: TimeofDay) -> Tuple[datetime, datetime]:
+		hour, minute, second = self.get_h_m_s(time)
+		reset_time = time - timedelta(hours = int(hour)) - timedelta(minutes = int(minute)) - timedelta(seconds = int(second))
+		start_h, start_m, start_s = self.get_h_m_s(self.cordinates[quadrant][0])
+		end_h, end_m, end_s = self.get_h_m_s(self.cordinates[quadrant][1])
+		if quadrant == TimeofDay.NIGHT:
+			start = reset_time - timedelta(days = 1) + timedelta(hours = int(start_h)) + timedelta(minutes = int(start_m)) + timedelta(seconds = int(start_s))
+		else:
+			start = reset_time + timedelta(hours = int(start_h)) + timedelta(minutes = int(start_m)) + timedelta(seconds = int(start_s))
+		end = reset_time + timedelta(hours = int(end_h)) + timedelta(minutes = int(end_m)) + timedelta(seconds = int(end_s))
+
+		return start, end
+
+
+	def next_quadrant(self) -> TimeofDay:
+		self.current_quadrant_value += 1
+		if self.current_quadrant_value > len(self.quadrants):
+			self.current_quadrant_value = 1
+		return self.quadrants[ self.current_quadrant_value  - 1]
+
+	def next_quadrant_times(self) -> Tuple[datetime, datetime]:
+		next_quadrant = self.next_quadrant()
+		if next_quadrant == TimeofDay.NIGHT:
+			self.start_time =  self.start_time + timedelta(hours = 4)
+			self.end_time =  self.end_time + timedelta(hours = 12)
+		elif next_quadrant == TimeofDay.MORNING:
+			self.start_time =  self.start_time + timedelta(hours = 12)
+			self.end_time =  self.end_time + timedelta(hours = 4)
+		else:
+			self.end_time =  self.end_time + timedelta(hours = 4)
+			self.start_time =  self.start_time + timedelta(hours = 4)
+			
+		return self.start_time, self.end_time
+
+	def get_h_m_s(self, time):
+		hour = time.strftime('%H')
+		minute = time.strftime('%M')
+		second = time.strftime('%S')
+		return hour, minute, second
+
+	def get_current_quadrant(self):
+		return self.quadrants[ self.current_quadrant_value  - 1]
+
+
 
 
 
@@ -90,7 +153,7 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row
 		else:
-			return (0, 0, date(1970, 0, 0))
+			return (0, 0, date(1970, 1, 1))
 
 	def is_new_round(self, round_number: int) -> bool:
 		return self.last_data[0] != round_number
@@ -102,7 +165,34 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row[0]
 		else:
-			return None
+			return date(1970, 1, 1)
+
+	def get_last_updated_latest(self) -> Union[datetime, None]:
+		query = f"SELECT latest_time FROM event_latest_over_space_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY latest_time DESC LIMIT 1"
+		self.cursor.execute(query)
+		row = self.cursor.fetchone()
+		if row is not None:
+			return row[0]
+		else:
+			return date(1970, 1, 1)
+
+	def get_last_updated_round(self) -> Union[int, None]:
+		query = f"SELECT round_number FROM event_round_over_space_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time DESC LIMIT 1"
+		self.cursor.execute(query)
+		row = self.cursor.fetchone()
+		if row is not None:
+			return row[0]
+		else:
+			return 0
+
+	def get_last_updated_day_number(self) -> Union[int, None]:
+		query = f"SELECT day FROM event_new_day_over_space_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time DESC LIMIT 1"
+		self.cursor.execute(query)
+		row = self.cursor.fetchone()
+		if row is not None:
+			return row[0]
+		else:
+			return 0
 
 	def get_last_hourly_overview(self) -> Union[datetime, None]:
 		query = f"SELECT time FROM event_hourly_overview_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time DESC LIMIT 1"
@@ -111,18 +201,19 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row[0]
 		else:
-			return None
+			return date(1970, 1, 1)
 
 	def is_new_time_of_day(self, time: datetime) -> bool:
 		current_quadrant = self.get_quadrant(time.time())
 		last_time = self.get_last_time_of_day()
-		last_quadrant = self.get_quadrant(last_time.time())
-		if(last_time is None):
+		if(last_time == date(1970, 1, 1)):
 			return True
+		last_quadrant = self.get_quadrant(last_time.time())
 		diff = time.date() - last_time.date()
 		number_of_days = int(diff.total_seconds() / (60 * 60 * 24))
 		quadrant_change = abs(last_quadrant - current_quadrant) >= 1
 		# If day is greater than 1 then there is a change for sure, however this if condition won't catch when there is a one day difference and the robot wasn't working.
+		print("check if time of day triggered correctly", current_quadrant, last_quadrant, quadrant_change, number_of_days)
 		if(number_of_days > 1 or quadrant_change):
 			return True
 		else:
@@ -146,8 +237,8 @@ class DPEvents(DataProcessingEvents):
 		if(last_time is None):
 			return True
 		else:
-			total = self.last_data[2] - time
-			return (total.total_seconds() // 60) >= 1
+			total = time - self.last_data[2]
+			return (total.total_seconds() // (60 * 60)) >= 1
 
 	def is_new_hourly(self, table: str) -> bool:
 		pass

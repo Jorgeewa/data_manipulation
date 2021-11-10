@@ -59,6 +59,8 @@ class DataProcessingGeneric(DataProcessing):
 					robot_id: str = None, 
 					observable_name: str = None, 
 					observable_id: str = None, 
+					x_dim: int = None,
+					y_dim: int = None,
 					type_: str = None,
 					download: Download = None, 
 					pc_details: ProductionCycleDetails = None, 
@@ -71,13 +73,17 @@ class DataProcessingGeneric(DataProcessing):
 		self.round_id = round_id
 		self.robot_id = robot_id
 		self.observable_name = observable_name
+		self.x_dim = x_dim
+		self.y_dim = y_dim
+		self.type = type_
 		self.observable_id = observable_id
 		self.download = download
 		self.pc_details = pc_details
 		self.data_events = data_events
 		self.table = f"round_data_{observable_name}"
 		self.logging = logging
-		self.params = { "round_id": round_id, "robot_id": robot_id, "observable_name": observable_name, "observable_id": observable_id, "type": type_, 'cnx': cnx}
+
+		self.params = { "roundId": round_id, "robotId": robot_id, "observableName": observable_name, "x_dim": x_dim, 'y_dim': y_dim, "type": type_}
 
 
 	def read_file(self) -> pd.DataFrame:
@@ -125,8 +131,8 @@ class DataProcessingGeneric(DataProcessing):
 		if not self.pc_details.is_valid_observable(self.robot_id, self.observable_id):
 			raise ObservableNotAvailable(self.round_id, self.observable_name, f"{self.observable_name} is not available for this robot")
 		self.check_suspicious_data(df)
-		df['round_id'] = self.round_id
-		df['observable_name'] = self.observable_name
+		df.loc[:, 'round_id'] = self.round_id
+		df.loc[:, 'observable_name'] = self.observable_name
 		first_row = df.iloc[0, :]['timestamp']
 		last_row = df.iloc[-1, :]['timestamp']
 		isRoundUnique, round_number = self.pc_details.get_round_number(first_row, last_row)
@@ -136,10 +142,9 @@ class DataProcessingGeneric(DataProcessing):
 			df[['round_number', 'is_valid']] = [ round_number[time.replace(second=0)] for time in  df['timestamp']]
 			# Discard invalid rounds
 			df = df[df['is_valid'] == 1]
-
-		df['day_of_production'] = self.pc_details.get_day_of_production(last_row)
+		df.loc[:, 'day_of_production'] = self.pc_details.get_day_of_production(last_row)
 		df = df.rename(columns={'timestamp': 'time', 'data': 'value'})
-		df_download = self.download(list(df['time'])[0])
+		df_download = self.download(time=list(df['time'])[0])
 		df = pd.concat([df_download, df], sort=True)
 		df['avg_timestamp'] = df['time'].apply(lambda x: x.value)
 		df = df.sort_values(by=['time']).reset_index(drop=True)
@@ -185,6 +190,8 @@ class DataProcessingGeneric(DataProcessing):
 		return {'is_new_round': new_round, 'is_new_day': new_day, 'is_new_time_of_day': new_time_of_day, 'is_new_hourly_overview': new_hourly_overview}
 
 	def post_time_events(self, **events: Dict[str, str]) -> None:
+		# post latest event
+		trigger_event(Events.LATEST, self.params)
 
 		# check if new round
 		if events['is_new_round']:
@@ -206,7 +213,7 @@ class DataProcessingGeneric(DataProcessing):
 
 		observables = self.data_events.is_derived_observable()
 		for observable in observables:
-			trigger_event(Events.DERIVED_OBSERVABLE, {"round_id": self.round_id, "observable_name": observable.value, "observable_name": observable_name, "type": self._type, 'cnx': self.cnx})
+			trigger_event(Events.DERIVED_OBSERVABLE, {"robotId": self.robot_id, "roundId": self.round_id, "observableName": observable, "xDim": self.xDim, 'yDim': self.yDim, "type": self.type})
 
 
 class DataProcessingAmbientCondition(DataProcessingGeneric):

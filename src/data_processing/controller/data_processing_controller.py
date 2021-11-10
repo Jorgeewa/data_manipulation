@@ -1,9 +1,6 @@
 from data_processing.db_connection.connection import DbConnection
-from data_processing.download.download import DownloadMainTablePandas
-from data_processing.production_cycle_details.production_cycle_details import PCDetails
-from data_processing.data_processing_events.data_processing_events import DPEvents
+from data_processing.controller.factories.data_processing import read_data_processing_exporter
 import logging
-from data_processing.data_cleaning.data_processing import DataProcessingAmbientCondition, DataProcessingAnomaly
 from data_processing.event_handlers.event_callables import db_events, email_events, rabbitmq_events, s3_events
 from data_processing.event_handlers.event_handler import register_event, trigger_event
 from data_processing.event_handlers.events import Events
@@ -46,61 +43,44 @@ def callback(ch, method, properties, body) -> None:
     try:
         temp.writelines(message['file_content'])
         temp.seek(0)
-        data_processing(ch, method, temp.name, message['roundId'], message['robotId'], message['observableName'], message['observableId'], message['type'], message['dataFile'])
+        data_processing(ch, method, temp.name, message['roundId'], message['robotId'], message['observableName'], message['observableId'], message['dimension']['dimX'], message['dimension']['dimY'], message['type'], message['dataFile'])
     finally:
         temp.close()
     
     print(f" [x] Received {message['observableName']} for robot: {message['robotId']} and round: {message['roundId']}")
-def data_processing(ch: pika.BlockingConnection.channel, method, file: Union[str, TextIO], round_id: str, robot_id: str, observable_name: str, observable_id: str, type_: str, s3_path: str) -> None:
+def data_processing(ch: pika.BlockingConnection.channel, method, file: Union[str, TextIO], round_id: str, robot_id: str, observable_name: str, observable_id: str, x_dim: int, y_dim: int, type_: str, s3_path: str) -> None:
     cnx = DbConnection().connect_to_db()
     log = logging.getLogger('data_processing')
-    download = DownloadMainTablePandas(cnx, round_id, observable_name)
-    pc_details = PCDetails(cnx, round_id, observable_name)
-    data_events = DPEvents(cnx, round_id, observable_name)
+    p = read_data_processing_exporter(type_)
+    processor = p.get_exporter(
+                                cnx=cnx, 
+                                file=file, 
+                                round_id=round_id, 
+                                robot_id=robot_id,
+                                observable_name=observable_name, 
+                                observable_id=observable_id,
+                                x_dim=x_dim,
+                                y_dim=y_dim,
+                                type_=type_,
+                                logging=log
+                                )
     msg = f"Data processing for {observable_name} for {round_id}  initiated."
     log.info(msg)
-
-    # test ambient conditions first. Use factory to set up ambient conditions and anomalies
-    if type_ == "ambient_conditions":
-        dp = DataProcessingAmbientCondition(
-                                        cnx=cnx, 
-                                        file=file, 
-                                        round_id=round_id, 
-                                        robot_id=robot_id,
-                                        observable_name=observable_name, 
-                                        observable_id=observable_id,
-                                        type_=type_, 
-                                        download=download, 
-                                        pc_details=pc_details, 
-                                        data_events=data_events,
-                                        logging=log)
-    else:
-        dp = DataProcessingAnomaly(
-                                        cnx=cnx, 
-                                        file=file, 
-                                        round_id=round_id, 
-                                        robot_id=robot_id,
-                                        observable_name=observable_name, 
-                                        observable_id=observable_id,
-                                        type_=type_, 
-                                        download=download, 
-                                        pc_details=pc_details, 
-                                        data_events=data_events,
-                                        logging=log)
     try:
-        df = dp.read_file()
-        df = dp.parse_data(df)
+        df = processor.read_file()
+        df = processor.parse_data(df)
         df = df.values.tolist()
         params = {"round_number": df[-1][3], 'day': df[-1][7], 'time': datetime.strptime(df[-1][5], "%Y-%m-%d %H:%M:%S")}
-        events = dp.check_events(params)
-        dp.upsert(df)
-        dp.post_time_events(**events)
-        dp.post_derived_observables()
-        cnx.close()
+        events = processor.check_events(params)
+        processor.upsert(df)
+        processor.post_time_events(**events)
+        processor.post_derived_observables()
+        print("worked should acknowledge", method.delivery_tag)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
         msg = f"Processing of {observable_name} has failed with error msg {str(e)}"
         log.exception(e)
+        print(e, "didn't work should nack", method.delivery_tag)
         ch.basic_nack(delivery_tag=method.delivery_tag)
     finally:
         trigger_event(Events.FILE_UPLOADED, { "round_id": round_id, "object_name": s3_path, "observable_id": observable_id, "file": file, 'cnx': cnx})
@@ -110,6 +90,7 @@ def data_processing(ch: pika.BlockingConnection.channel, method, file: Union[str
 def register_events() -> None:
     register_event(Events.INVALID_ROUND, db_events.invalid_alert)
     register_event(Events.SUSPICIOUS_DATA, email_events.suspicious_data)
+    register_event(Events.LATEST, rabbitmq_events.trigger_time_events)
     register_event(Events.NEW_ROUND, rabbitmq_events.trigger_time_events)
     register_event(Events.NEW_NEW_DAY, rabbitmq_events.trigger_time_events)
     register_event(Events.NEW_TIME_OF_DAY, rabbitmq_events.trigger_time_events)

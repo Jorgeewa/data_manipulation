@@ -89,7 +89,7 @@ def suspicious_data(event: str, params: Dict[str, str]) -> None:
     email = Email()
     ''' send an email when stuff is broken '''
     print("sent an email")
-    sender = "noreply@faromatics.com"
+    sender = "xxx"
     body_html = """
             <html>
             <head></head>
