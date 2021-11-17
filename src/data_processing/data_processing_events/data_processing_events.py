@@ -41,7 +41,7 @@ class TimeofDay(Enum):
 
 class TimeofDayComputation:
 
-	def __init__(self, time, quadrant: TimeofDay):
+	def __init__(self, time, quadrant: TimeofDay, final_time: datetime = None, final_time_quadrant = None):
 		self.quadrants = [TimeofDay.MORNING, TimeofDay.AFTERNOON, TimeofDay.EVENING, TimeofDay.NIGHT]
 		self.current_quadrant_value = quadrant.value
 		self.cordinates = {
@@ -51,6 +51,8 @@ class TimeofDayComputation:
 			TimeofDay.NIGHT: (TimeofDayPeriod.NIGHT_START, TimeofDayPeriod.NIGHT_END),
 		}
 		self.start_time, self.end_time = self.reset_quadrants(time, quadrant)
+		self.start_final_time, self.end_final_time = self.reset_quadrants(final_time, final_time_quadrant)
+		self.start_final_time = self.start_final_time - timedelta(hours=1)
 
 	def reset_quadrants(self, time: datetime, quadrant: TimeofDay) -> Tuple[datetime, datetime]:
 		hour, minute, second = self.get_h_m_s(time)
@@ -83,8 +85,17 @@ class TimeofDayComputation:
 		else:
 			self.end_time =  self.end_time + timedelta(hours = 4)
 			self.start_time =  self.start_time + timedelta(hours = 4)
-			
+
 		return self.start_time, self.end_time
+
+	def __iter__(self):
+		return self
+
+	def __next__(self):
+		
+		if self.end_time > self.start_final_time:
+			raise StopIteration
+		return self.next_quadrant_times()
 
 	def get_h_m_s(self, time):
 		hour = time.strftime('%H')
@@ -131,7 +142,7 @@ class DataProcessingEvents(ABC):
 
 	@abstractmethod
 	def is_derived_observable(self) -> bool:
-		pass		
+		pass
 
 
 
@@ -144,7 +155,9 @@ class DPEvents(DataProcessingEvents):
 		self.observable_name = observable_name
 		self.round_id = round_id
 		self.round_table = f"round_data_{observable_name}"
+		self.default_time = datetime(1970, 1, 1, 0, 0, 1)
 		self.last_data = self.get_last_main_table_row()
+
 
 	def get_last_main_table_row(self):
 		query = f"SELECT round_number, day_of_production, time FROM {self.round_table} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time DESC LIMIT 1"
@@ -153,7 +166,16 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row
 		else:
-			return (0, 0, date(1970, 1, 1))
+			return (0, 0, self.default_time)
+
+	def get_first_main_table_row(self):
+		query = f"SELECT round_number, day_of_production, time FROM {self.round_table} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time ASC LIMIT 1"
+		self.cursor.execute(query)
+		row = self.cursor.fetchone()
+		if row is not None:
+			return row
+		else:
+			return (0, 0, self.default_time)
 
 	def is_new_round(self, round_number: int) -> bool:
 		return self.last_data[0] != round_number
@@ -165,7 +187,7 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row[0]
 		else:
-			return date(1970, 1, 1)
+			return self.default_time
 
 	def get_last_updated_latest(self) -> Union[datetime, None]:
 		query = f"SELECT latest_time FROM event_latest_over_space_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY latest_time DESC LIMIT 1"
@@ -174,7 +196,7 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row[0]
 		else:
-			return date(1970, 1, 1)
+			return self.default_time
 
 	def get_last_updated_round(self) -> Union[int, None]:
 		query = f"SELECT round_number FROM event_round_over_space_{self.observable_name} WHERE round_id='{self.round_id}' AND observable_name='{self.observable_name}' ORDER BY time DESC LIMIT 1"
@@ -201,12 +223,12 @@ class DPEvents(DataProcessingEvents):
 		if row is not None:
 			return row[0]
 		else:
-			return date(1970, 1, 1)
+			return self.default_time
 
 	def is_new_time_of_day(self, time: datetime) -> bool:
 		current_quadrant = self.get_quadrant(time.time())
 		last_time = self.get_last_time_of_day()
-		if(last_time == date(1970, 1, 1)):
+		if(last_time == self.default_time):
 			return True
 		last_quadrant = self.get_quadrant(last_time.time())
 		diff = time.date() - last_time.date()
@@ -230,6 +252,7 @@ class DPEvents(DataProcessingEvents):
 			return TimeofDay.NIGHT
 
 	def is_new_day(self, day: int) -> bool:
+		print(f"is new day valid? day = {day} and last one was self.last_data[1] = {self.last_data[1]}")
 		return self.last_data[1] != day
 
 	def is_new_hourly_overview(self, time: datetime) -> bool:
@@ -272,7 +295,7 @@ class DPEvents(DataProcessingEvents):
 		# Check if none
 		if number is None:
 			return
-		
+
 		# If there is no bad round return
 		if number[0] == 1 or number[0] == 0:
 			return
@@ -281,13 +304,13 @@ class DPEvents(DataProcessingEvents):
 			query = f"Select time, round_number from round_counter where round_id='{self.round_id}' and round_number={round_number} and is_valid_round = 1 order by time desc limit 1"
 			self.cursor.execute(query)
 			valid_time, round_number = self.cursor.fetchone()
-			
+
 
 			# get other invalid time
 			query = f"Select time, round_number from round_counter where round_id='{self.round_id}' and round_number={round_number} and is_valid_round=0 order by time asc"
 			self.cursor.execute(query)
 			invalid_times = self.cursor.fetchall()
-			
+
 
 			for invalid_time in invalid_times:
 				time, round_number = invalid_time
@@ -304,7 +327,7 @@ class DPEvents(DataProcessingEvents):
 					# This should delete all the invalid times till the valid one
 					query = f"delete from {self.table} where time>='{time}' and time <'{valid_time}' and round_number={round_number} and round_id='{self.round_id}'"
 					self.cursor.execute(query)
-					self.cnx.commit()	
+					self.cnx.commit()
 					trigger_event('invalid_round', {'round_id': self.round_id, 'round_number': round_number, 'time': time})
 
 
